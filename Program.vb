@@ -1,242 +1,602 @@
 
-Imports System
+Option Strict On
+Option Explicit On
+
 Imports System.IO
 Imports System.Globalization
 Imports System.Collections.Generic
 Imports System.Linq
 Imports Microsoft.VisualBasic.FileIO
-
-' Represents one fund price record
-Public Class FundPrice
-
-    Public Property ISIN As String
-    Public Property ValuationDate As DateTime
-    Public Property NAV As Decimal
-    Public Property Currency As String
-
-End Class
+Imports System.Text.RegularExpressions
 
 Module Program
 
+    ' Represents one valid fund price record.
+    Public Class FundPrice
+
+        Public Property ISIN As String
+        Public Property ValuationDate As DateTime
+        Public Property NAVPerUnit As Decimal
+        Public Property QuoteCurrency As String
+        Public Property BaseCurrency As String
+        Public Property BaseNAV As Decimal
+
+    End Class
+
     Sub Main()
-
-        Dim folderPath As String = "C:\Users\wwwpu\OneDrive\Desktop\Visual Studio 2022\Projects\FundPriceProcessor\FundPriceProcessor\ProfileData"
-
-        Dim files() As String =
-            Directory.GetFiles(folderPath, "202610*.csv").
-            OrderBy(Function(f) Path.GetFileName(f)).
-            ToArray()
-
-        Dim records As New List(Of FundPrice)
-
-        Dim seenRecords As New HashSet(Of String)(
-            StringComparer.OrdinalIgnoreCase)
-
-        Dim rejectedRecords As Integer = 0
-
-        Dim dateFormats As String() = {
-            "dd/MM/yyyy",
-            "M/d/yyyy",
-            "MM/dd/yyyy"
-        }
 
         Console.WriteLine("FUND PERFORMANCE PROCESSOR")
         Console.WriteLine("===========================")
+        Console.WriteLine()
 
-        ' Process each CSV file
+        ' --------------------------------------------------
+        ' CONFIGURATION
+        ' --------------------------------------------------
+
+        Dim folderPath As String = "C:\Users\wwwpu\OneDrive\Desktop\Visual Studio 2022\Projects\FundPriceProcessor\FundPriceProcessor\ProfileData"
+
+        If Not Directory.Exists(folderPath) Then
+
+            Console.WriteLine("ERROR: Folder does not exist:")
+            Console.WriteLine(folderPath)
+
+            Return
+
+        End If
+
+        Dim files As String() =
+            Directory.GetFiles(folderPath, "*.csv").
+            OrderBy(Function(f) f).
+            ToArray()
+
+        If files.Length = 0 Then
+
+            Console.WriteLine("No CSV files found.")
+            Return
+
+        End If
+
+        ' --------------------------------------------------
+        ' CSV COLUMN DEFINITIONS
+        ' --------------------------------------------------
+
+        Dim requiredColumns As String() = {
+            "ISIN",
+            "Valuation_Date",
+            "NAV_per_unit",
+            "QUOTCurrency",
+            "BASECurrency",
+            "Unrounded_Base_NAV"
+        }
+
+        ' --------------------------------------------------
+        ' DATA COLLECTION
+        ' --------------------------------------------------
+
+        Dim records As New List(Of FundPrice)
+
+        Dim validRecords As Integer = 0
+        Dim rejectedRecords As Integer = 0
+        Dim duplicateRecords As Integer = 0
+        Dim filesProcessed As Integer = 0
+
+        Dim seenRecords As New HashSet(Of String)(
+            StringComparer.OrdinalIgnoreCase
+        )
+
+        ' --------------------------------------------------
+        ' PROCESS ALL CSV FILES
+        ' --------------------------------------------------
+
         For Each filePath As String In files
 
-            Console.WriteLine()
             Console.WriteLine("Reading: " &
                               Path.GetFileName(filePath))
 
-            Using parser As New TextFieldParser(filePath)
+            Try
 
-                parser.TextFieldType = FieldType.Delimited
-                parser.SetDelimiters(",")
-                parser.HasFieldsEnclosedInQuotes = True
-                parser.TrimWhiteSpace = False
+                Using parser As New TextFieldParser(filePath)
 
-                Dim headers() As String = parser.ReadFields()
+                    parser.TextFieldType = FieldType.Delimited
+                    parser.SetDelimiters(",")
+                    parser.HasFieldsEnclosedInQuotes = True
+                    parser.TrimWhiteSpace = False
 
-                Dim columns As New Dictionary(Of String, Integer)(
-                    StringComparer.OrdinalIgnoreCase)
+                    If parser.EndOfData Then
+                        Continue For
+                    End If
 
-                For i As Integer = 0 To headers.Length - 1
-                    columns(headers(i).Trim()) = i
-                Next
+                    ' Read header row.
+                    Dim headers As String() = parser.ReadFields()
 
-                Dim rowNumber As Integer = 1
+                    If headers Is Nothing Then
+                        Continue For
+                    End If
 
-                While Not parser.EndOfData
+                    ' Build header-to-column lookup.
+                    Dim columnIndexes As New Dictionary(Of String, Integer)(
+                        StringComparer.OrdinalIgnoreCase
+                    )
 
-                    rowNumber += 1
+                    For i As Integer = 0 To headers.Length - 1
 
-                    Try
+                        Dim headerName As String =
+                            headers(i).Trim().TrimStart(ChrW(&HFEFF))
 
-                        Dim fields() As String = parser.ReadFields()
+                        If Not columnIndexes.ContainsKey(headerName) Then
+                            columnIndexes.Add(headerName, i)
+                        End If
 
-                        ' Check field count
+                    Next
+
+                    ' Verify required columns.
+                    Dim missingColumns As New List(Of String)
+
+                    For Each columnName As String In requiredColumns
+
+                        If Not columnIndexes.ContainsKey(columnName) Then
+                            missingColumns.Add(columnName)
+                        End If
+
+                    Next
+
+                    If missingColumns.Count > 0 Then
+
+                        Console.WriteLine(
+                            "File rejected. Missing columns: " &
+                            String.Join(", ", missingColumns)
+                        )
+
+                        Continue For
+
+                    End If
+
+                    filesProcessed += 1
+
+                    ' Read data rows.
+                    Dim rowNumber As Integer = 1
+
+                    While Not parser.EndOfData
+
+                        rowNumber += 1
+
+                        Dim fields As String() = Nothing
+
+                        Try
+
+                            fields = parser.ReadFields()
+
+                        Catch ex As MalformedLineException
+
+                            rejectedRecords += 1
+
+                            Console.WriteLine(
+                                "Rejected row " & rowNumber &
+                                ": Malformed CSV line."
+                            )
+
+                            Continue While
+
+                        End Try
+
+                        If fields Is Nothing Then
+                            Continue While
+                        End If
+
+                        ' Validate field count.
                         If fields.Length <> headers.Length Then
 
                             rejectedRecords += 1
 
                             Console.WriteLine(
-                                $"Rejected row {rowNumber}: Invalid field count")
+                                "Rejected row " & rowNumber &
+                                ": Invalid field count. Expected " &
+                                headers.Length & ", received " &
+                                fields.Length
+                            )
 
                             Continue While
 
                         End If
 
-                        ' Extract required fields
+                        ' Extract fields using header names.
                         Dim isin As String =
-                            fields(columns("ISIN")).Trim()
+                            fields(columnIndexes("ISIN")).Trim()
 
                         Dim dateText As String =
-                            fields(columns("Valuation_Date")).Trim()
+                            fields(columnIndexes("Valuation_Date")).Trim()
 
                         Dim navText As String =
-                            fields(columns("NAV_per_unit")).Trim()
+                            fields(columnIndexes("NAV_per_unit")).Trim()
 
-                        Dim currency As String =
-                            fields(columns("QUOTCurrency")).Trim()
+                        Dim quoteCurrency As String =
+                            fields(columnIndexes("QUOTCurrency")).Trim().ToUpperInvariant()
 
-                        ' Validate ISIN and currency presence
-                        If String.IsNullOrWhiteSpace(isin) OrElse
-                           String.IsNullOrWhiteSpace(currency) Then
+                        Dim baseCurrency As String =
+                            fields(columnIndexes("BASECurrency")).Trim().ToUpperInvariant()
+
+                        Dim baseNAVText As String =
+                            fields(columnIndexes("Unrounded_Base_NAV")).Trim()
+
+                        ' Validate ISIN.
+                        If Not Regex.IsMatch(
+                            isin,
+                            "^[A-Z]{2}[A-Z0-9]{10}$"
+                        ) Then
 
                             rejectedRecords += 1
+
+                            Console.WriteLine(
+                                "Rejected row " & rowNumber &
+                                ": Invalid ISIN."
+                            )
+
                             Continue While
 
                         End If
 
-                        ' Parse valuation date
+                        ' Validate valuation date.
                         Dim valuationDate As DateTime
+
+                        Dim acceptedDateFormats As String() = {
+                            "dd/MM/yyyy",
+                            "yyyy-MM-dd"
+                        }
 
                         If Not DateTime.TryParseExact(
                             dateText,
-                            dateFormats,
+                            acceptedDateFormats,
                             CultureInfo.InvariantCulture,
                             DateTimeStyles.None,
-                            valuationDate) Then
+                            valuationDate
+                        ) Then
 
                             rejectedRecords += 1
+
+                            Console.WriteLine(
+                                "Rejected row " & rowNumber &
+                                ": Invalid valuation date."
+                            )
+
                             Continue While
 
                         End If
 
-                        ' Parse NAV
-                        Dim nav As Decimal
+                        ' Validate NAV per unit.
+                        Dim navPerUnit As Decimal
 
                         If Not Decimal.TryParse(
                             navText,
                             NumberStyles.Number,
                             CultureInfo.InvariantCulture,
-                            nav) OrElse nav <= 0D Then
+                            navPerUnit
+                        ) OrElse navPerUnit <= 0D Then
 
                             rejectedRecords += 1
-                            Continue While
 
-                        End If
-
-                        ' Prevent duplicate records
-                        Dim recordKey As String =
-                            isin & "|" &
-                            valuationDate.ToString("yyyy-MM-dd") & "|" &
-                            currency
-
-                        If Not seenRecords.Add(recordKey) Then
-
-                            rejectedRecords += 1
                             Console.WriteLine(
-                                $"Duplicate record: {recordKey}")
+                                "Rejected row " & rowNumber &
+                                ": Invalid NAV per unit."
+                            )
 
                             Continue While
 
                         End If
 
-                        ' Store validated record
-                        records.Add(New FundPrice With {
+                        ' Validate base NAV.
+                        Dim baseNAV As Decimal
+
+                        If Not Decimal.TryParse(
+                            baseNAVText,
+                            NumberStyles.Number,
+                            CultureInfo.InvariantCulture,
+                            baseNAV
+                        ) OrElse baseNAV <= 0D Then
+
+                            rejectedRecords += 1
+
+                            Console.WriteLine(
+                                "Rejected row " & rowNumber &
+                                ": Invalid base NAV."
+                            )
+
+                            Continue While
+
+                        End If
+
+                        ' Validate currencies.
+                        Dim allowedCurrencies As String() = {
+                            "USD", "EUR", "GBP", "CAD",
+                            "SEK", "NOK", "CHF", "ZAR"
+                        }
+
+                        If Not allowedCurrencies.Contains(quoteCurrency) OrElse
+                           Not allowedCurrencies.Contains(baseCurrency) Then
+
+                            rejectedRecords += 1
+
+                            Console.WriteLine(
+                                "Rejected row " & rowNumber &
+                                ": Unsupported currency."
+                            )
+
+                            Continue While
+
+                        End If
+
+                        ' Prevent duplicate ISIN/date combinations.
+                        Dim duplicateKey As String =
+                            isin & "|" &
+                            valuationDate.ToString("yyyyMMdd")
+
+                        If Not seenRecords.Add(duplicateKey) Then
+
+                            duplicateRecords += 1
+
+                            Console.WriteLine(
+                                "Duplicate record: " & duplicateKey
+                            )
+
+                            Continue While
+
+                        End If
+
+                        ' Create the record.
+                        Dim fundRecord As New FundPrice With {
                             .ISIN = isin,
                             .ValuationDate = valuationDate,
-                            .NAV = nav,
-                            .Currency = currency
-                        })
+                            .NAVPerUnit = navPerUnit,
+                            .QuoteCurrency = quoteCurrency,
+                            .BaseCurrency = baseCurrency,
+                            .BaseNAV = baseNAV
+                        }
 
-                    Catch ex As MalformedLineException
+                        records.Add(fundRecord)
+                        validRecords += 1
 
-                        rejectedRecords += 1
+                    End While
 
-                        Console.WriteLine(
-                            $"Malformed record at row {rowNumber}")
+                End Using
 
-                    End Try
+            Catch ex As Exception
 
-                End While
+                Console.WriteLine(
+                    "File processing error: " & ex.Message
+                )
 
-            End Using
+            End Try
+
+            Console.WriteLine()
 
         Next
 
-        Console.WriteLine()
-        Console.WriteLine("Files processed: " & files.Length)
-        Console.WriteLine("Valid records: " & records.Count)
-        Console.WriteLine("Rejected records: " & rejectedRecords)
+        ' --------------------------------------------------
+        ' PROCESSING SUMMARY
+        ' --------------------------------------------------
 
-        ' Calculate performance
+        Console.WriteLine("========== PROCESSING SUMMARY ==========")
+
+        Console.WriteLine("Files processed: " & filesProcessed)
+        Console.WriteLine("Valid records: " & validRecords)
+        Console.WriteLine("Rejected records: " & rejectedRecords)
+        Console.WriteLine("Duplicate records: " & duplicateRecords)
+
         Console.WriteLine()
-        Console.WriteLine("========== FUND PERFORMANCE ==========")
+
+        If records.Count = 0 Then
+
+            Console.WriteLine("No valid records available.")
+            Return
+
+        End If
+
+        ' --------------------------------------------------
+        ' COLLECT HISTORICAL USD/ZAR EXCHANGE RATES
+        ' --------------------------------------------------
+
+        Dim fxRates As New Dictionary(Of DateTime, Decimal)
+
+        Dim usdDates As List(Of DateTime) =
+            records.
+            Where(Function(r) r.BaseCurrency = "USD").
+            Select(Function(r) r.ValuationDate.Date).
+            Distinct().
+            OrderBy(Function(d) d).
+            ToList()
+
+        If usdDates.Count > 0 Then
+
+            Console.WriteLine("========== USD/ZAR RATES ==========")
+
+            Console.WriteLine(
+                "Enter verified historical rates."
+            )
+
+            Console.WriteLine(
+                "Format: ZAR per 1 USD"
+            )
+
+            Console.WriteLine()
+
+            For Each valuationDate As DateTime In usdDates
+
+                Dim exchangeRate As Decimal = 0D
+                Dim validRate As Boolean = False
+
+                While Not validRate
+
+                    Console.Write(
+                        valuationDate.ToString("dd/MM/yyyy") &
+                        " USD/ZAR: "
+                    )
+
+                    Dim rateInput As String =
+                        Console.ReadLine()
+
+                    If Decimal.TryParse(
+                        rateInput,
+                        NumberStyles.Number,
+                        CultureInfo.InvariantCulture,
+                        exchangeRate
+                    ) AndAlso exchangeRate > 0D Then
+
+                        validRate = True
+
+                    Else
+
+                        Console.WriteLine(
+                            "Invalid rate. Enter a positive number, " &
+                            "for example 18.25."
+                        )
+
+                    End If
+
+                End While
+
+                fxRates(valuationDate.Date) = exchangeRate
+
+            Next
+
+        End If
+
+        Console.WriteLine()
+
+        ' --------------------------------------------------
+        ' CALCULATE FUND PERFORMANCE IN ZAR
+        ' --------------------------------------------------
+
+        Console.WriteLine("========== ZAR FUND PERFORMANCE ==========")
 
         Dim fundGroups = records.
-            GroupBy(Function(r) r.ISIN & "|" & r.Currency).
+            GroupBy(Function(r) r.ISIN).
             OrderBy(Function(g) g.Key)
 
         For Each fundGroup In fundGroups
 
-            Dim prices = fundGroup.
+            Dim orderedRecords As List(Of FundPrice) =
+                fundGroup.
                 OrderBy(Function(r) r.ValuationDate).
                 ToList()
 
-            Dim firstPrice As FundPrice = prices.First()
-            Dim lastPrice As FundPrice = prices.Last()
+            Dim firstPrice As FundPrice = orderedRecords.First()
+            Dim lastPrice As FundPrice = orderedRecords.Last()
 
-            Dim percentageReturn As Decimal =
-                ((lastPrice.NAV - firstPrice.NAV) /
-                firstPrice.NAV) * 100D
+            ' This exercise assumes a fund keeps the same
+            ' base currency throughout the reporting period.
+            Dim baseCurrency As String = firstPrice.BaseCurrency
+
+            If orderedRecords.Any(
+                Function(r) r.BaseCurrency <> baseCurrency
+            ) Then
+
+                Console.WriteLine(
+                    "Skipped " & fundGroup.Key &
+                    ": Inconsistent base currencies."
+                )
+
+                Continue For
+
+            End If
+
+            Dim startNAVZAR As Decimal
+            Dim endNAVZAR As Decimal
+
+            If baseCurrency = "USD" Then
+
+                Dim startFX As Decimal
+                Dim endFX As Decimal
+
+                If Not fxRates.TryGetValue(
+                    firstPrice.ValuationDate.Date,
+                    startFX
+                ) OrElse
+                   Not fxRates.TryGetValue(
+                    lastPrice.ValuationDate.Date,
+                    endFX
+                ) Then
+
+                    Console.WriteLine(
+                        "Missing FX rate for " & fundGroup.Key
+                    )
+
+                    Continue For
+
+                End If
+
+                startNAVZAR = firstPrice.BaseNAV * startFX
+                endNAVZAR = lastPrice.BaseNAV * endFX
+
+            ElseIf baseCurrency = "ZAR" Then
+
+                startNAVZAR = firstPrice.BaseNAV
+                endNAVZAR = lastPrice.BaseNAV
+
+            Else
+
+                Console.WriteLine(
+                    "Skipped " & fundGroup.Key &
+                    ": Base currency " & baseCurrency &
+                    " has no conversion configured."
+                )
+
+                Continue For
+
+            End If
+
+            If startNAVZAR <= 0D Then
+                Continue For
+            End If
+
+            ' Calculate percentage return.
+            Dim performance As Decimal =
+                ((endNAVZAR - startNAVZAR) / startNAVZAR) * 100D
 
             Console.WriteLine()
-            Console.WriteLine("ISIN: " & firstPrice.ISIN)
-            Console.WriteLine("Currency: " & firstPrice.Currency)
+
+            Console.WriteLine("ISIN: " & fundGroup.Key)
 
             Console.WriteLine(
-                "Starting NAV: " &
-                firstPrice.NAV.ToString("N4"))
+                "Base currency: " & baseCurrency
+            )
 
             Console.WriteLine(
-                "Ending NAV: " &
-                lastPrice.NAV.ToString("N4"))
+                "Observations: " & orderedRecords.Count
+            )
 
             Console.WriteLine(
                 "Start date: " &
-                firstPrice.ValuationDate.ToString("dd/MM/yyyy"))
+                firstPrice.ValuationDate.ToString("dd-MM-yyyy")
+            )
 
             Console.WriteLine(
                 "End date: " &
-                lastPrice.ValuationDate.ToString("dd/MM/yyyy"))
+                lastPrice.ValuationDate.ToString("dd-MM-yyyy")
+            )
 
             Console.WriteLine(
-                "Observations: " & prices.Count)
+                "Start NAV (ZAR): " &
+                startNAVZAR.ToString("N4")
+            )
 
             Console.WriteLine(
-                "NAV Return: " &
-                percentageReturn.ToString("N2") & "%")
+                "End NAV (ZAR): " &
+                endNAVZAR.ToString("N4")
+            )
+
+            Console.WriteLine(
+                "ZAR Performance: " &
+                performance.ToString("N2") & "%"
+            )
 
         Next
 
         Console.WriteLine()
-        Console.WriteLine("Performance calculation completed.")
+        Console.WriteLine("Processing complete.")
 
-        Console.ReadKey()
+        Console.WriteLine()
+        Console.WriteLine("Press ENTER to exit.")
+
+        Console.ReadLine()
 
     End Sub
 
