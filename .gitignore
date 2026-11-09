@@ -1,0 +1,61 @@
+## ==========================================
+## Build Outputs and Binaries
+## ==========================================
+[Dd]ebug/
+[Dd]ebugPublic/
+[Rr]elease/
+[Rr]eleases/
+x64/
+x86/
+Win32/
+ARM/
+ARM64/
+bld/
+bin/
+obj/
+out/
+log/
+logs/
+
+## ==========================================
+## Visual Studio User-Specific Files & Caches
+## ==========================================
+.vs/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.vspcc
+*.vscc
+*.vssscc
+*.sln.cache
+
+## ==========================================
+## Package Management (NuGet & Packages)
+## ==========================================
+*.nupkg
+*.snupkg
+packages/
+!packages/repositories.config
+
+## ==========================================
+## Testing and Code Coverage
+## ==========================================
+GeneratedFiles/
+_Chutzpah*
+*.trx
+*.mdurl
+_ReSharper*/
+*.[Rr]e[Ss]harper
+*.DotSettings.user
+Ankh.diff
+CodeCoverage/
+TestResult*
+
+## ==========================================
+## Environment Configurations & Secrets
+## ==========================================
+.env
+.env.*
+*.pubxml
+*.publishproj
