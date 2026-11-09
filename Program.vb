@@ -590,6 +590,50 @@ Module Program
 
         Next
 
+
+        ' --------------------------------------------------
+        ' DATABASE FUND PRICE MATCHING
+        ' --------------------------------------------------
+
+        Console.WriteLine()
+        Console.WriteLine("========== DATABASE FUND PRICE MATCHING ==========")
+
+        Try
+
+            Dim repository As New FundRepository()
+
+            Dim databaseRecords As List(Of FundPriceMatch) =
+        repository.GetFundPriceMatches()
+
+            For Each record As FundPriceMatch In databaseRecords
+
+                Console.WriteLine(
+            $"{record.ISIN} | " &
+            $"{record.FundName} | " &
+            $"{record.Currency} | " &
+            $"{record.Price:N4} | " &
+            $"{record.UpdateDate:dd-MM-yyyy} | " &
+            $"{record.MappingStatus}"
+        )
+
+            Next
+
+            Dim matchedCount As Integer = System.Linq.Enumerable.Count(databaseRecords, Function(x) x.MappingStatus = "MATCHED")
+
+            Dim unmatchedCount As Integer = System.Linq.Enumerable.Count(databaseRecords, Function(x) x.MappingStatus = "UNMATCHED")
+
+            Console.WriteLine()
+            Console.WriteLine("Database records: " & databaseRecords.Count)
+            Console.WriteLine("Matched: " & matchedCount)
+            Console.WriteLine("Unmatched: " & unmatchedCount)
+
+        Catch ex As Exception
+
+            Console.WriteLine("Database processing error:")
+            Console.WriteLine(ex.Message)
+
+        End Try
+
         Console.WriteLine()
         Console.WriteLine("Processing complete.")
 
