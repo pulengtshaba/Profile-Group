@@ -11,18 +11,6 @@ Imports System.Text.RegularExpressions
 
 Module Program
 
-    ' Represents one valid fund price record.
-    Public Class FundPrice
-
-        Public Property ISIN As String
-        Public Property ValuationDate As DateTime
-        Public Property NAVPerUnit As Decimal
-        Public Property QuoteCurrency As String
-        Public Property BaseCurrency As String
-        Public Property BaseNAV As Decimal
-
-    End Class
-
     Sub Main()
 
         Console.WriteLine("FUND PERFORMANCE PROCESSOR")
@@ -240,6 +228,7 @@ Module Program
 
                         Dim acceptedDateFormats As String() = {
                             "dd/MM/yyyy",
+                            "M/d/yyyy",
                             "yyyy-MM-dd"
                         }
 
@@ -327,6 +316,7 @@ Module Program
                         ' Prevent duplicate ISIN/date combinations.
                         Dim duplicateKey As String =
                             isin & "|" &
+                            quoteCurrency & "|" &
                             valuationDate.ToString("yyyyMMdd")
 
                         If Not seenRecords.Add(duplicateKey) Then
@@ -589,6 +579,51 @@ Module Program
             )
 
         Next
+
+        ' --------------------------------------------------
+        ' EXERCISE 6: DATABASE FUND PRICE IMPORT
+        ' --------------------------------------------------
+
+        Console.WriteLine()
+        Console.WriteLine("========== DATABASE FUND PRICE IMPORT ==========")
+
+        Try
+
+            Dim repository As New FundRepository()
+
+            Console.WriteLine("Starting database import...")
+
+            Dim importSummary As ImportSummary =
+        repository.ImportFundPrices(records)
+
+            Console.WriteLine()
+            Console.WriteLine("========== IMPORT SUMMARY ==========")
+
+            Console.WriteLine(
+        "Total processed: " & importSummary.TotalProcessed
+    )
+
+            Console.WriteLine(
+        "Inserted: " & importSummary.InsertedRecords
+    )
+
+            Console.WriteLine(
+        "Updated: " & importSummary.UpdatedRecords
+    )
+
+            Console.WriteLine(
+        "Failed: " & importSummary.FailedRecords
+    )
+
+            Console.WriteLine("Database transaction completed.")
+
+        Catch ex As Exception
+
+            Console.WriteLine()
+            Console.WriteLine("DATABASE IMPORT FAILED")
+            Console.WriteLine(ex.Message)
+
+        End Try
 
 
         ' --------------------------------------------------
